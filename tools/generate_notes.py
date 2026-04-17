@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-从 raw/*.txt 生成 notes/*.html，并把链接插入 index.html 的“最近更新”列表。
+从 raw/*.txt 生成 notes/*.html。
 
 规则：
 - txt 第 1 行：标题
@@ -11,7 +11,6 @@
 
 幂等：
 - notes 中已存在 html → 不生成
-- index.html 中已存在该链接 → 不插入
 """
 
 from __future__ import annotations
@@ -188,8 +187,6 @@ def main():
         print("[info] raw/ 中没有 txt 文件")
         return
 
-    index_html = INDEX_PATH.read_text(encoding="utf-8")
-
     new_notes = []
 
     for txt in txt_files:
@@ -211,20 +208,8 @@ def main():
         print("[info] 没有新文章生成")
         return
 
-    before_ul, ul_inner, after_ul = extract_recent_updates_ul(index_html)
-
-    to_insert = [n for n in new_notes if not index_has_href(index_html, n.href)]
-    to_insert.sort(key=lambda n: n.date, reverse=True)
-
-    if to_insert:
-        new_block = "".join(build_li(n) for n in to_insert)
-        INDEX_PATH.write_text(
-            before_ul + new_block + ul_inner + after_ul,
-            encoding="utf-8",
-        )
-        print(f"[ok] index.html 插入 {len(to_insert)} 条链接")
-    else:
-        print("[info] index.html 已包含所有链接")
+    print(f"[ok] 新生成 {len(new_notes)} 篇文章")
+    print("[next] 运行 python tools/rebuild.py 更新 index/all/archive")
 
 
 if __name__ == "__main__":
