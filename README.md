@@ -28,7 +28,7 @@ python tools/rebuild.py
 
 ## 主题（themes）
 
-主题页由 `themes.html` 手动维护，不受脚本影响。
+主题入口和空主题块可以用脚本新增；主题内的文章列表仍由 `themes.html` 手动维护。
 
 ### 把新文章加入已有主题
 
@@ -38,22 +38,42 @@ python tools/rebuild.py
 
 ### 新增一个主题
 
+运行：
+
+```bash
+python tools/rebuild.py --add-theme "Nonsense"
+```
+
+这条命令会自动完成三件事：
+
 1) 在 `themes.html` 顶部的主题导航区（`<div class="quick">`）新增一个 pill：
 
 ```html
-<a class="pill" href="#New Theme">New Theme</a>
+<a class="pill" href="#Nonsense">Nonsense</a>
 ```
 
-2) 新增一个主题区块，`id` 需要和 pill 的 `href` 一致：
+2) 在 `themes.html` 中新增一个空主题区块，`id` 和 pill 的 `href` 一致：
 
 ```html
-<section class="card" id="New Theme">
-  <h2>New Theme</h2>
+<section class="card" id="Nonsense">
+  <h2>Nonsense</h2>
   <ul class="list">
     <!-- 手动维护 -->
   </ul>
 </section>
 ```
+
+3) 在 `index.html` 首页主题区新增入口，保证首页能看到这个主题：
+
+```html
+<a class="block" href="./themes.html#Nonsense">
+  <div class="block-title">Nonsense</div>
+</a>
+```
+
+命令可以重复运行；如果对应入口或区块已经存在，脚本会自动跳过，不会重复插入。
+
+新增主题后，如果要把文章放进这个主题，仍然打开 `themes.html`，在对应 `<section id="Nonsense">` 的 `<ul class="list">` 内手动添加 `<li>`。
 
 ## 常见问题
 

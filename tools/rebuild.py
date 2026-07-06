@@ -1,6 +1,7 @@
 # tools/rebuild.py
 from __future__ import annotations
 
+import argparse
 import re
 from pathlib import Path
 from datetime import datetime
@@ -10,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 NOTES_DIR = ROOT / "notes"
 
 INDEX_PATH = ROOT / "index.html"
+THEMES_PATH = ROOT / "themes.html"
 ALL_PATH = ROOT / "all.html"
 ARCHIVE_PATH = ROOT / "archive.html"
 
@@ -27,6 +29,16 @@ AUTOGEN_START = "<!-- AUTOGEN_RECENT_START -->"
 AUTOGEN_END = "<!-- AUTOGEN_RECENT_END -->"
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Rebuild site pages or add a theme block.")
+    parser.add_argument(
+        "--add-theme",
+        metavar="NAME",
+        help="Add a theme entry to themes.html and index.html, for example: Nonsense",
+    )
+    return parser.parse_args()
+
+
 def strip_html(s: str) -> str:
     """去掉 html 标签，保留纯文本"""
     s = unescape(s)
@@ -36,6 +48,93 @@ def strip_html(s: str) -> str:
 
 def safe_read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
+
+
+def clean_theme_name(theme: str) -> str:
+    theme = theme.strip()
+    if not theme:
+        raise SystemExit("--add-theme needs a non-empty theme name")
+    if re.search(r'[<>"\r\n]', theme):
+        raise SystemExit('Theme names cannot contain <, >, ", or line breaks')
+    return theme
+
+
+def patch_theme_nav(themes_html: str, theme: str) -> tuple[str, bool]:
+    if f'href="#{theme}"' in themes_html:
+        return themes_html, False
+
+    match = re.search(r'(<div class="quick">\s*)(.*?)(\n\s*</div>)', themes_html, re.S)
+    if not match:
+        raise RuntimeError('themes.html does not contain <div class="quick">')
+
+    pill = f'        <a class="pill" href="#{theme}">{theme}</a>'
+    replacement = match.group(1) + match.group(2).rstrip() + "\n" + pill + match.group(3)
+    return themes_html[: match.start()] + replacement + themes_html[match.end() :], True
+
+
+def patch_theme_section(themes_html: str, theme: str) -> tuple[str, bool]:
+    section_pattern = r'<section\b[^>]*\bid="' + re.escape(theme) + r'"'
+    if re.search(section_pattern, themes_html):
+        return themes_html, False
+
+    footer = re.search(r"\n\s*<footer class=\"footer\">", themes_html)
+    if not footer:
+        raise RuntimeError('themes.html does not contain <footer class="footer">')
+
+    section = f"""    <section class="card" id="{theme}">
+      <h2>{theme}</h2>
+      <ul class="list">
+        <!-- 手动把文章链接放这里 -->
+      </ul>
+    </section>
+"""
+    return themes_html[: footer.start()] + "\n" + section + themes_html[footer.start() :], True
+
+
+def patch_index_theme_block(index_html: str, theme: str) -> tuple[str, bool]:
+    href = f'./themes.html#{theme}'
+    if f'href="{href}"' in index_html:
+        return index_html, False
+
+    marker = 'href="./themes.html#'
+    marker_pos = index_html.find(marker)
+    if marker_pos == -1:
+        raise RuntimeError("index.html does not contain any themes.html# links")
+
+    grid_start = index_html.rfind('<div class="grid">', 0, marker_pos)
+    if grid_start == -1:
+        raise RuntimeError('index.html does not contain a theme <div class="grid">')
+
+    grid_end = index_html.find("\n      </div>", marker_pos)
+    if grid_end == -1:
+        raise RuntimeError("index.html theme grid closing tag was not found")
+
+    block = f"""      <a class="block" href="{href}">
+        <div class="block-title">{theme}</div>
+      </a>
+"""
+    return index_html[:grid_end] + "\n" + block + index_html[grid_end:], True
+
+
+def add_theme(theme: str) -> None:
+    theme = clean_theme_name(theme)
+
+    themes_html = safe_read_text(THEMES_PATH)
+    index_html = safe_read_text(INDEX_PATH)
+
+    themes_html, nav_added = patch_theme_nav(themes_html, theme)
+    themes_html, section_added = patch_theme_section(themes_html, theme)
+    index_html, index_added = patch_index_theme_block(index_html, theme)
+
+    if nav_added or section_added:
+        THEMES_PATH.write_text(themes_html, encoding="utf-8")
+    if index_added:
+        INDEX_PATH.write_text(index_html, encoding="utf-8")
+
+    print(f"[ok] theme ready: {theme}")
+    print(f"     themes nav: {'added' if nav_added else 'already exists'}")
+    print(f"     themes block: {'added' if section_added else 'already exists'}")
+    print(f"     index block: {'added' if index_added else 'already exists'}")
 
 
 def parse_post(fp: Path) -> dict:
@@ -258,6 +357,11 @@ def patch_index_recent(index_html: str, recent_posts: list[dict]) -> str:
 
 
 def main() -> None:
+    args = parse_args()
+    if args.add_theme:
+        add_theme(args.add_theme)
+        return
+
     if not NOTES_DIR.exists():
         raise SystemExit(f"找不到 notes 目录：{NOTES_DIR}")
 
