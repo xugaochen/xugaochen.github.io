@@ -30,11 +30,27 @@ AUTOGEN_END = "<!-- AUTOGEN_RECENT_END -->"
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Rebuild site pages or add a theme block.")
+    parser = argparse.ArgumentParser(
+        description="Rebuild site pages, add/rename themes, or delete a generated note."
+    )
     parser.add_argument(
         "--add-theme",
         metavar="NAME",
         help="Add a theme entry to themes.html and index.html, for example: Nonsense",
+    )
+    parser.add_argument(
+        "--rename-theme",
+        nargs=2,
+        metavar=("OLD_NAME", "NEW_NAME"),
+        help="Rename a theme in themes.html and index.html, for example: Nonsense Random",
+    )
+    parser.add_argument(
+        "--delete-post",
+        metavar="QUERY",
+        help=(
+            "Delete one generated note by title, filename, or date-title. "
+            "This does not delete files under raw/."
+        ),
     )
     return parser.parse_args()
 
@@ -50,10 +66,19 @@ def safe_read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
+def clean_query(query: str, arg_name: str) -> str:
+    query = query.strip()
+    if not query:
+        raise SystemExit(f"{arg_name} needs a non-empty value")
+    if re.search(r"[\r\n]", query):
+        raise SystemExit(f"{arg_name} cannot contain line breaks")
+    return query
+
+
 def clean_theme_name(theme: str) -> str:
     theme = theme.strip()
     if not theme:
-        raise SystemExit("--add-theme needs a non-empty theme name")
+        raise SystemExit("Theme names cannot be empty")
     if re.search(r'[<>"\r\n]', theme):
         raise SystemExit('Theme names cannot contain <, >, ", or line breaks')
     return theme
@@ -135,6 +160,218 @@ def add_theme(theme: str) -> None:
     print(f"     themes nav: {'added' if nav_added else 'already exists'}")
     print(f"     themes block: {'added' if section_added else 'already exists'}")
     print(f"     index block: {'added' if index_added else 'already exists'}")
+
+
+def theme_anchor_exists(html: str, theme: str) -> bool:
+    return f'href="#{theme}"' in html or bool(
+        re.search(
+            r'<section\b[^>]*\bid="' + re.escape(theme) + r'"', html
+        )
+    )
+
+
+def index_theme_exists(html: str, theme: str) -> bool:
+    return f'href="./themes.html#{theme}"' in html
+
+
+def patch_theme_nav_name(themes_html: str, old: str, new: str) -> str:
+    pattern = (
+        r'(<a class="pill" href="#)'
+        + re.escape(old)
+        + r'(">)(?:'
+        + re.escape(old)
+        + r')(</a>)'
+    )
+    patched, count = re.subn(
+        pattern,
+        lambda m: f"{m.group(1)}{new}{m.group(2)}{new}{m.group(3)}",
+        themes_html,
+        count=1,
+    )
+    if count != 1:
+        raise RuntimeError(f'themes.html does not contain theme nav "{old}"')
+    return patched
+
+
+def patch_theme_section_name(themes_html: str, old: str, new: str) -> str:
+    pattern = (
+        r'(<section\b[^>]*\bid=")'
+        + re.escape(old)
+        + r'("[^>]*>\s*<h2>)'
+        + re.escape(old)
+        + r'(</h2>)'
+    )
+    patched, count = re.subn(
+        pattern,
+        lambda m: f"{m.group(1)}{new}{m.group(2)}{new}{m.group(3)}",
+        themes_html,
+        count=1,
+        flags=re.S,
+    )
+    if count != 1:
+        raise RuntimeError(f'themes.html does not contain theme section "{old}"')
+    return patched
+
+
+def patch_index_theme_name(index_html: str, old: str, new: str) -> str:
+    pattern = (
+        r'(<a class="block" href="./themes\.html#)'
+        + re.escape(old)
+        + r'(">\s*<div class="block-title">)'
+        + re.escape(old)
+        + r'(</div>)'
+    )
+    patched, count = re.subn(
+        pattern,
+        lambda m: f"{m.group(1)}{new}{m.group(2)}{new}{m.group(3)}",
+        index_html,
+        count=1,
+        flags=re.S,
+    )
+    if count != 1:
+        raise RuntimeError(f'index.html does not contain theme block "{old}"')
+    return patched
+
+
+def rename_theme(old: str, new: str) -> None:
+    old = clean_theme_name(old)
+    new = clean_theme_name(new)
+
+    themes_html = safe_read_text(THEMES_PATH)
+    index_html = safe_read_text(INDEX_PATH)
+
+    if old == new:
+        if not theme_anchor_exists(themes_html, old) and not index_theme_exists(
+            index_html, old
+        ):
+            raise SystemExit(f'Theme "{old}" does not exist')
+        print(f"[ok] theme name unchanged: {old}")
+        return
+
+    if not theme_anchor_exists(themes_html, old) and not index_theme_exists(
+        index_html, old
+    ):
+        raise SystemExit(f'Theme "{old}" does not exist')
+    if theme_anchor_exists(themes_html, new) or index_theme_exists(index_html, new):
+        raise SystemExit(f'Theme "{new}" already exists')
+
+    themes_html = patch_theme_nav_name(themes_html, old, new)
+    themes_html = patch_theme_section_name(themes_html, old, new)
+    index_html = patch_index_theme_name(index_html, old, new)
+
+    THEMES_PATH.write_text(themes_html, encoding="utf-8")
+    INDEX_PATH.write_text(index_html, encoding="utf-8")
+
+    print(f"[ok] theme renamed: {old} -> {new}")
+    print("     themes nav: updated")
+    print("     themes block: updated")
+    print("     index block: updated")
+
+
+def read_posts() -> list[dict]:
+    if not NOTES_DIR.exists():
+        raise SystemExit(f"找不到 notes 目录：{NOTES_DIR}")
+
+    posts: list[dict] = []
+    for fp in NOTES_DIR.glob("*.html"):
+        # notes 目录下只要是 html 就当文章；如果有特殊文件可在这里排除
+        posts.append(parse_post(fp))
+
+    posts.sort(key=lambda x: x["dt"], reverse=True)
+    return posts
+
+
+def post_match_keys(post: dict) -> set[str]:
+    return {
+        post["file"],
+        Path(post["file"]).stem,
+        post["title"],
+        f'{post["date"]}-{post["title"]}',
+        f'{post["date"]} {post["title"]}',
+        post["href"],
+        f'notes/{post["file"]}',
+        f'notes\\{post["file"]}',
+        post["href"].removeprefix("./notes/"),
+    }
+
+
+def find_post(query: str, posts: list[dict]) -> dict:
+    query = clean_query(query, "--delete-post")
+
+    exact_matches = [post for post in posts if query in post_match_keys(post)]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if len(exact_matches) > 1:
+        names = "\n".join(
+            f'  - {post["date"]} {post["title"]} ({post["file"]})'
+            for post in exact_matches
+        )
+        raise SystemExit(f'Multiple posts match "{query}":\n{names}')
+
+    query_lower = query.lower()
+    fuzzy_matches = [
+        post
+        for post in posts
+        if query_lower in post["title"].lower()
+        or query_lower in post["file"].lower()
+        or query_lower in Path(post["file"]).stem.lower()
+    ]
+    if len(fuzzy_matches) == 1:
+        return fuzzy_matches[0]
+    if len(fuzzy_matches) > 1:
+        names = "\n".join(
+            f'  - {post["date"]} {post["title"]} ({post["file"]})'
+            for post in fuzzy_matches
+        )
+        raise SystemExit(f'Multiple posts match "{query}":\n{names}')
+
+    raise SystemExit(f'No generated note matches "{query}"')
+
+
+def remove_post_from_themes(themes_html: str, href: str) -> tuple[str, int]:
+    pattern = (
+        r'^[^\S\r\n]*<li\b[^>]*>\s*<a\s+href="'
+        + re.escape(href)
+        + r'"[\s\S]*?</li>[^\S\r\n]*(?:\r?\n)?'
+    )
+    return re.subn(pattern, "", themes_html, flags=re.M)
+
+
+def rebuild_site() -> None:
+    posts = read_posts()
+
+    ALL_PATH.write_text(build_all_html(posts), encoding="utf-8")
+    ARCHIVE_PATH.write_text(build_archive_html(posts), encoding="utf-8")
+
+    index_html = safe_read_text(INDEX_PATH)
+    new_index = patch_index_recent(index_html, posts[:RECENT_N])
+    INDEX_PATH.write_text(new_index, encoding="utf-8")
+
+
+def delete_post(query: str) -> None:
+    posts = read_posts()
+    post = find_post(query, posts)
+    note_path = NOTES_DIR / post["file"]
+    resolved_notes_dir = NOTES_DIR.resolve()
+    resolved_note_path = note_path.resolve()
+
+    if resolved_note_path.parent != resolved_notes_dir:
+        raise SystemExit(f"Refusing to delete outside notes/: {note_path}")
+
+    note_path.unlink()
+
+    themes_html = safe_read_text(THEMES_PATH)
+    themes_html, theme_refs_removed = remove_post_from_themes(themes_html, post["href"])
+    if theme_refs_removed:
+        THEMES_PATH.write_text(themes_html, encoding="utf-8")
+
+    rebuild_site()
+
+    print(f'[ok] post deleted: {post["date"]} {post["title"]}')
+    print(f'     notes file: deleted notes/{post["file"]}')
+    print("     raw files: untouched")
+    print(f"     themes refs: {theme_refs_removed} removed")
+    print("     index/all/archive: rebuilt")
 
 
 def parse_post(fp: Path) -> dict:
@@ -358,8 +595,17 @@ def patch_index_recent(index_html: str, recent_posts: list[dict]) -> str:
 
 def main() -> None:
     args = parse_args()
+    actions = [args.add_theme, args.rename_theme, args.delete_post]
+    if sum(bool(action) for action in actions) > 1:
+        raise SystemExit("Use only one of --add-theme, --rename-theme, or --delete-post")
     if args.add_theme:
         add_theme(args.add_theme)
+        return
+    if args.rename_theme:
+        rename_theme(args.rename_theme[0], args.rename_theme[1])
+        return
+    if args.delete_post:
+        delete_post(args.delete_post)
         return
 
     if not NOTES_DIR.exists():

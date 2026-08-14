@@ -75,6 +75,26 @@ python tools/rebuild.py --add-theme "Nonsense"
 
 新增主题后，如果要把文章放进这个主题，仍然打开 `themes.html`，在对应 `<section id="Nonsense">` 的 `<ul class="list">` 内手动添加 `<li>`。
 
+### 修改一个主题的名字
+
+运行：
+
+```bash
+python tools/rebuild.py --rename-theme "Nonsense" "Random"
+```
+
+这条命令会同步修改 `themes.html` 顶部主题导航、对应主题区块的 `id` / 标题，以及 `index.html` 首页主题入口。只需要输入原名字和新名字即可；如果新名字已经存在，脚本会提示并停止。
+
+### 删除一篇文章
+
+运行：
+
+```bash
+python tools/rebuild.py --delete-post "文章标题或 notes 文件名"
+```
+
+这条命令只会删除 `notes/` 里生成出来的文章 HTML，从 `themes.html` 里移除对应文章链接，并重建 `index.html`、`all.html`、`archive.html`。`raw/` 里的源文件不会被删除。
+
 ## 常见问题
 
 - 日期格式必须是 `YYYY-MM-DD`，否则脚本会提示跳过。
